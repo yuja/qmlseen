@@ -10,10 +10,10 @@
 
 namespace {
 void grabItemsRecursively(std::set<QSharedPointer<QQuickItemGrabResult>> &grabResults,
-                          QQuickItem *item)
+                          QQuickItem *item, bool quitOnLastItemGrabbed)
 {
     for (auto *child : item->childItems()) {
-        grabItemsRecursively(grabResults, child);
+        grabItemsRecursively(grabResults, child, quitOnLastItemGrabbed);
     }
 
     const auto fileName = item->property("fileName").toString();
@@ -26,18 +26,19 @@ void grabItemsRecursively(std::set<QSharedPointer<QQuickItemGrabResult>> &grabRe
     }
 
     grabResults.insert(grab);
-    QObject::connect(grab.get(), &QQuickItemGrabResult::ready, [fileName, grab, &grabResults]() {
-        auto ok = grab->saveToFile(fileName);
-        if (ok) {
-            qInfo() << "Saved file" << fileName;
-        } else {
-            qWarning() << "Failed to save file" << fileName;
-        }
-        grabResults.erase(grab);
-        if (grabResults.empty()) {
-            QCoreApplication::quit();
-        }
-    });
+    QObject::connect(grab.get(), &QQuickItemGrabResult::ready,
+                     [fileName, grab, &grabResults, quitOnLastItemGrabbed]() {
+                         auto ok = grab->saveToFile(fileName);
+                         if (ok) {
+                             qInfo() << "Saved file" << fileName;
+                         } else {
+                             qWarning() << "Failed to save file" << fileName;
+                         }
+                         grabResults.erase(grab);
+                         if (grabResults.empty() && quitOnLastItemGrabbed) {
+                             QCoreApplication::quit();
+                         }
+                     });
 }
 } // namespace
 
@@ -47,6 +48,7 @@ int main(int argc, char *argv[])
 
     QCommandLineParser parser;
     parser.addHelpOption();
+    parser.addOption({ "show-window", "Show QML file in window" });
     parser.addPositionalArgument("filename", "Source QML file to process.");
     parser.process(app);
 
@@ -57,10 +59,16 @@ int main(int argc, char *argv[])
     }
 
     const auto fileName = arguments.front();
+    const bool showWindow = parser.isSet("show-window");
 
     QWindow dummyWindow;
-    dummyWindow.create();
-    QQuickView offscreenView(QUrl::fromLocalFile(fileName), &dummyWindow);
+    QQuickView offscreenView;
+    if (!showWindow) {
+        dummyWindow.create();
+        offscreenView.setParent(&dummyWindow);
+    }
+
+    offscreenView.setSource(QUrl::fromLocalFile(fileName));
     auto *rootItem = offscreenView.rootObject();
     if (!rootItem) {
         qWarning() << "No root item created from" << fileName;
@@ -70,7 +78,7 @@ int main(int argc, char *argv[])
     offscreenView.show();
 
     std::set<QSharedPointer<QQuickItemGrabResult>> grabResults;
-    grabItemsRecursively(grabResults, rootItem);
+    grabItemsRecursively(grabResults, rootItem, /*quitOnLastItemGrabbed=*/!showWindow);
     if (grabResults.empty()) {
         qWarning() << "No item to grab found in " << fileName;
         qWarning() << "(Set fileName property to items to be grabbed.)";
